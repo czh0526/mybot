@@ -82,8 +82,6 @@ class EmailChannel(BaseChannel):
 
             await asyncio.sleep(poll_seconds)
 
-        pass
-
     async def stop(self) -> None:
         """
         停止邮箱监听服务

@@ -164,7 +164,7 @@ class CronService:
             self._timer_task.cancel()
             self._timer_task = None 
 
-    async def _recompute_next_runs(self) -> None:
+    def _recompute_next_runs(self) -> None:
         """
         Recompute next run times for all enabld jobs.
         """

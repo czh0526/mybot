@@ -8,6 +8,7 @@ from mybot.utils import get_workspace_path
 from mybot.session.manager import SessionManager
 from mybot.channels.manager import ChannelManager
 from mybot.cron.service import CronService
+from mybot.heartbeat.service import HeartbeatService
 from mybot.cron.types import CronJob 
 
 
@@ -193,11 +194,25 @@ def gateway(
 
 	cron.on_job = on_cron_job
 
+	async def on_heartbeat(prompt: str) -> str:
+		"""
+		Execute heartbeat through the agent.
+		"""
+		return await agent.process_direct(prompt, session_key="heartbeat")
+	
+	heartbeat = HeartbeatService(
+		workspace=config.workspace_path,
+		on_heartbeat=on_heartbeat,
+		interval_s=3*60,
+		enabled=True
+	) 
+
 	channels = ChannelManager(config, bus, session_manager=session_manager)
 
 	async def run():
 		try:
 			await cron.start()
+			await heartbeat.start()
 			await asyncio.gather(
 				agent.run(),
 				channels.start_all(),
@@ -206,6 +221,7 @@ def gateway(
 			console.print("正在关闭网关服务...")
 			# 在这里添加任何必要的清理代码，例如关闭数据库连接、保存状态等
 			cron.stop()
+			heartbeat.stop()
 			agent.stop()
 			await channels.stop_all()
 			
