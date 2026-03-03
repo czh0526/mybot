@@ -6,16 +6,17 @@ from mybot.providers.base import LLMProvider
 from mybot.bus.queue import MessageBus
 from mybot.bus.events import InboundMessage, OutboundMessage
 from mybot.session.manager import SessionManager
-from mybot.config.schema import ExecToolConfig
-from mybot.cron.service import CronService 
+from mybot.config.schema import ExecToolConfig, EmailConfig
+from mybot.cron.service import CronService
 from mybot.agent.context import ContextBuilder
 from mybot.agent.subagent import SubagentManager
-from mybot.agent.tools.registry import ToolRegistry 
-from mybot.agent.tools.message import MessageTool 
-from mybot.agent.tools.spawn import SpawnTool 
+from mybot.agent.tools.registry import ToolRegistry
+from mybot.agent.tools.message import MessageTool
+from mybot.agent.tools.spawn import SpawnTool
 from mybot.agent.tools.shell import ExecTool
 from mybot.agent.tools.web import WebFetchTool, WebSearchTool
 from mybot.agent.tools.cron import CronTool
+from mybot.agent.tools.email import EmailTool
 from mybot.agent.tools.filsystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
 
 
@@ -27,9 +28,11 @@ class AgentLoop:
         workspace: Path,
         model: str | None = None,
         max_iterations: int = 20,
-        brave_api_key: str | None = None,
+        search_api_key: str | None = None,
+        search_engine: str | None = None,
         exec_config: "ExecToolConfig | None" = None, 
         cron_service: "CronService | None" = None,
+        email_config: "EmailConfig | None" = None,
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None, 
     ):
@@ -38,9 +41,11 @@ class AgentLoop:
         self.workspace = workspace
         self.model = model or provider.get_default_model() 
         self.max_iterations = max_iterations
-        self.brave_api_key = brave_api_key
+        self.search_api_key = search_api_key
+        self.search_engine = search_engine
         self.exec_config = exec_config or ExecToolConfig()
-        self.cron_service = cron_service 
+        self.email_config = email_config
+        self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace 
 
         self.context = ContextBuilder(workspace)
@@ -51,8 +56,10 @@ class AgentLoop:
             workspace=workspace, 
             bus=bus,
             model=self.model,
-            brave_api_key=brave_api_key,
+            search_api_key=search_api_key,
+            search_engine=search_engine,
             exec_config=self.exec_config,
+            email_config=self.email_config,
             restrict_to_workspace=restrict_to_workspace,
         )
 
@@ -75,7 +82,10 @@ class AgentLoop:
             restrict_to_workspace=self.restrict_to_workspace,
         ))
 
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key))
+        self.tools.register(WebSearchTool(
+            api_key=self.search_api_key,
+            engine=self.search_engine
+            ))
         self.tools.register(WebFetchTool())
 
         message_tool = MessageTool(send_callback=self.bus.publish_outbound)
@@ -86,6 +96,8 @@ class AgentLoop:
 
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
+
+        self.tools.register(EmailTool(self.email_config))
 
     async def run(self) -> None:
         self._running = True
@@ -151,10 +163,10 @@ class AgentLoop:
         if isinstance(spawn_tool, SpawnTool):
             spawn_tool.set_context(msg.channel, msg.chat_id) 
         
-        cron_tool = self.tools.get("cron") 
+        cron_tool = self.tools.get("cron")
         if isinstance(cron_tool, CronTool):
-            cron_tool.set_context(msg.channel, msg.chat_id) 
-        
+            cron_tool.set_context(msg.channel, msg.chat_id)
+
         messages = self.context.build_messages(
             history=session.get_history(),
             current_message=msg.content, 
@@ -249,6 +261,10 @@ class AgentLoop:
         cron_tool = self.tools.get("cron")
         if isinstance(cron_tool, CronTool):
             cron_tool.set_context(origin_channel, origin_chat_id)
+
+        email_tool = self.tools.get("email")
+        if isinstance(email_tool, EmailTool):
+            email_tool.set_context(origin_channel, origin_chat_id)
 
         messages = self.context.build_messages(
             history=session.get_history(),

@@ -3,16 +3,98 @@ import re
 import html 
 import json 
 import httpx
+from loguru import logger
 from typing import Any
 from urllib.parse import urlparse 
 from mybot.agent.tools.base import Tool 
+from abc import ABC, abstractmethod 
+
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36"
 MAX_REDIRECTS = 5
 
+class SearchBackend(ABC):
+    """
+    Abstract base class for search engine backends.
+    """
+    @abstractmethod 
+    async def search(self, query: str, count: int) -> list[dict]:
+        """
+        Execute search and return list of results with title, url, snippet.
+        """
+        pass 
+
+    @abstractmethod 
+    def is_available(self) -> tuple[bool, str]:
+        """
+        Check if the backend is available. Returns (available, error_mssage).
+        """
+        pass 
+
+class DuckDuckGoBackend(SearchBackend):
+    """
+    DuckDuckGo HTML search = free, on API key required.
+    """
+    async def search(self, query: str, count: int) -> list[dict]:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                "https://html.duckduckgo.com/html/",
+                params={"q": query},
+                headers={"User-Agent": USER_AGENT, "Accept": "text/html"},
+                timeout=15.0
+            )
+            r.raise_for_status() 
+
+        return self._parse_html(r.text, count)
+
+    def is_available(self) -> tuple[bool, str]:
+        return True, "", 
+
+    def _parse_html(self, html_content: str, max_results: int) -> list[dict]:
+        """Parse DuckDuckGo HTML search results."""
+        results = []
+        
+        # Pattern to extract title and URL
+        title_pattern = re.compile(
+            r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>',
+            re.DOTALL | re.IGNORECASE
+        )
+        snippet_pattern = re.compile(
+            r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>',
+            re.DOTALL | re.IGNORECASE
+        )
+        
+        # Split by result divs
+        result_divs = re.split(
+            r'<div[^>]*class="[^"]*result[^"]*results_links[^"]*"',
+            html_content
+        )
+        
+        for div in result_divs[1:max_results + 1]:
+            title_match = title_pattern.search(div)
+            snippet_match = snippet_pattern.search(div)
+            
+            if title_match:
+                url = title_match.group(1)
+                # Extract actual URL from DuckDuckGo redirect
+                if "uddg=" in url:
+                    parsed = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+                    url = parsed.get("uddg", [url])[0]
+                
+                title = _strip_tags(title_match.group(2))
+                snippet = _strip_tags(snippet_match.group(1)) if snippet_match else ""
+                
+                if title and url:
+                    results.append({"title": title, "url": url, "snippet": snippet})
+            
+            if len(results) >= max_results:
+                break
+        
+        return results
+
 class WebSearchTool(Tool):
     """
-    Search the web using Brave Search API.
+    Search the web using configurable search engine backend.
     """
     name = "web_search"
     description = "Search the web. Returns titles, URLs, and snippets."
@@ -33,45 +115,58 @@ class WebSearchTool(Tool):
         "required": ["query"]
     }
 
-    def __init__(self, api_key: str | None = None, max_results: int = 5):
-        self.api_key = api_key or os.environ.get("BRAVE_API_KEY", "")
+    def __init__(self, 
+        api_key: str | None = None, 
+        max_results: int = 5,
+        engine: str = "duckduckgo"):
+        
         self.max_results = max_results 
+        self.engine = engine.lower()
 
-    async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str: 
-        if not self.api_key:
-            return "Error: BRAVE_API_KEY not configured"
+        if api_key:
+            self.api_key = api_key 
+        elif self.engine == "tavily":
+            self.api_key = os.environ.get("TAVILY_API_KEY", "")
+        elif self.engine == "brave":
+            self.api_key = os.environ.get("BRAVE_API_KEY", "") 
+
+        self._backend = self._create_backend()
+
+    def _create_backend(self) -> SearchBackend:
+        """Create the search backend based on configured engine."""
+        if self.engine == "duckduckgo":
+            return DuckDuckGoBackend()
+        else:
+            logger.error(f"Unsupported engine `{self.engine}`")
+            return None
+
+    async def execute(
+        self, 
+        query: str, 
+        count: int | None = None, 
+        **kwargs: Any) -> str: 
+        
+        available, error_msg = self._backend.is_available()
+        if not available:
+            return f"Error: {error_msg}"
         
         try:
             n = min(max(count or self.max_results, 1), 10)
-            async with httpx.AsyncClient() as client:
-                r = await client.get(
-                    "https://api.search.brave.com/res/v1/web/search",
-                    params={
-                        "q": query, 
-                        "count": n,
-                    },
-                    headers={
-                        "Accept": "application/json",
-                        "X-Subscription-Token": self.api_key, 
-                    },
-                    timeout=10.0
-                )
-                r.raise_for_status()
+            
+            results = await self._backend.search(query, n)
+            if not results:
+                return f"Noresults for: {query}"
+            
+            lines = [f"Results for: {query}\n"]
+            for i, item in enumerate(results, 1):
+                lines.append(f"{i}. {item['title']}\n   {item['url']}")
+                if item.get("snippet"):
+                    lines.append(f" {item['snippet']}")
 
-                results = r.json().get("web", {}).get("results", [])
-                if not results:
-                    return f"No results for: {query}"
-
-                lines = [f"Results for: {query}\n"]
-                for i, item in enumerate(results[:n], 1):
-                    lines.append(f"{i}. {item.get('title', '')}\n {item.get('url', '')}")
-                    if desc := item.get("description"):
-                        lines.append(f"   {desc}")
-                return "\n".join(lines)
+            return "\n".join(lines) 
 
         except Exception as e:
             return f"Error: {e}"
-        
 
 def _validate_url(url: str) -> tuple[bool, str]:
     """

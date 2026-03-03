@@ -93,7 +93,7 @@ class WriteFileTool(Tool):
             file_path.write_text(content, encoding="utf-8")
             return f"Successfully wrote {len(content)} bytes to {path}"
         except PermissionError as e:
-            return f"rror: {e}"
+            return f"Error: {e}"
         except Exception as e:
             return f"Error writing file: {str(e)}"
 

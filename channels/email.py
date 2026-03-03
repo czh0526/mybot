@@ -16,6 +16,7 @@ from mybot.channels.base import BaseChannel
 from mybot.config.schema import EmailConfig
 from mybot.bus.queue import MessageBus
 from mybot.bus.events import OutboundMessage 
+from mybot.email.smtp import smtp_send 
 
 class EmailChannel(BaseChannel):
     """
@@ -129,33 +130,12 @@ class EmailChannel(BaseChannel):
             email_msg["References"] = in_reply_to
 
         try:
-            await asyncio.to_thread(self._smtp_send, email_msg)
+            await asyncio.to_thread(smtp_send, self.config, email_msg)
         except Exception as e:
             logger.error(f"Error sending email to {to_addr}: {e}")
             raise 
 
-    def _smtp_send(self, msg: EmailMessage) -> None:
-        timeout = 30
-        if self.config.smtp_use_ssl:
-            with smtplib.SMTP_SSL(
-                self.config.smtp_host,
-                self.config.smtp_port,
-                timeout=timeout,
-            ) as smtp:
-                smtp.login(self.config.smtp_username, self.config.smtp_password)
-                smtp.send_message(msg)
-                return 
-
-        with smtplib.SMTP(
-            self.config.smtp_host,
-            self.config.smtp_port,
-            timeout=timeout, 
-        ) as smtp:
-            if self.config.smtp_use_tls:
-                smtp.starttls(context=ssl.create_default_context())
-            smtp.login(self.config.smtp_username, self.config.smtp_password)
-            smtp.send_message(msg)
-
+    
     def _reply_subject(self, base_subject: str) -> str:
         subject = (base_subject or "").strip() or "mybot reply"
         prefix = self.config.subject_prefix or "Re: "

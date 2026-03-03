@@ -65,6 +65,7 @@ class GatewayConfig (BaseModel):
 
 class WebSearchConfig(BaseModel):
     """Configuration for web search tools."""
+    engine: str = "duckduckgo"
     api_key: str = ""
     max_results: int = 5
 

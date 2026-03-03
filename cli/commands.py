@@ -166,9 +166,11 @@ def gateway(
 		workspace=config.workspace_path,
 		model=config.agents.defaults.model,
 		max_iterations=config.agents.defaults.max_tool_iterations,
-		brave_api_key=config.tools.web.search.api_key or None,
+		search_api_key=config.tools.web.search.api_key or None,
+		search_engine=config.tools.web.search.engine,
 		exec_config=config.tools.exec,
-		cron_service=cron, 
+		cron_service=cron,
+		email_config=config.channels.email,
 		restrict_to_workspace=config.tools.restrict_to_workspace,
 		session_manager=session_manager,
 	)
